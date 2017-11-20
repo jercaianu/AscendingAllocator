@@ -230,27 +230,27 @@ struct AscendingAllocator
 
 @system unittest
 {
+    static void testrw(void[] b)
+    {
+        ubyte* buf = cast(ubyte*) b.ptr;
+        buf[0] = 100;
+        assert(buf[0] == 100);
+        buf[b.length - 1] = 101;
+        assert(buf[b.length - 1] == 101);
+    }
+
     AscendingAllocator a = AscendingAllocator(4);
-    ubyte* testPtr;
     void[] b1 = a.allocate(1);
     assert(a.getAvailableSize() == 3 * 4096);
-    testPtr = cast(ubyte*) b1.ptr;
-    testPtr[0] = 3;
-    assert(testPtr[0] == 3);
+    testrw(b1);
 
     void[] b2 = a.allocate(2);
     assert(a.getAvailableSize() == 2 * 4096);
-    testPtr = cast(ubyte*) b2.ptr;
-    testPtr[1] = 7;
-    assert(testPtr[1] == 7);
+    testrw(b2);
 
     void[] b3 = a.allocate(4097);
     assert(a.getAvailableSize() == 0);
-    testPtr = cast(ubyte*) b3.ptr;
-    testPtr[1000] = 17;
-    assert(testPtr[1000] == 17);
-    testPtr[4096] = 19;
-    assert(testPtr[4096] == 19);
+    testrw(b3);
 
     assert(b1.length == 1);
     assert(b2.length == 2);
@@ -271,13 +271,22 @@ struct AscendingAllocator
 
 @system unittest
 {
+    static void testrw(void[] b)
+    {
+        ubyte* buf = cast(ubyte*) b.ptr;
+        buf[0] = 100;
+        buf[b.length - 1] = 101;
+
+        assert(buf[0] == 100);
+        assert(buf[b.length - 1] == 101);
+    }
+
     size_t numPages = 26214;
     AscendingAllocator a = AscendingAllocator(numPages);
     for (int i = 0; i < numPages; i++) {
-        void[] buf = a.allocate(1);
-        assert(buf.length == 1);
-        *cast(ubyte*)buf.ptr = 10;
-        assert(*cast(ubyte*)buf.ptr == 10);
+        void[] buf = a.allocate(4096);
+        assert(buf.length == 4096);
+        testrw(buf);
         a.deallocate(buf);
     }
 
@@ -289,6 +298,16 @@ struct AscendingAllocator
 
 @system unittest
 {
+    static void testrw(void[] b)
+    {
+        ubyte* buf = cast(ubyte*) b.ptr;
+        buf[0] = 100;
+        buf[b.length - 1] = 101;
+
+        assert(buf[0] == 100);
+        assert(buf[b.length - 1] == 101);
+    }
+
     size_t numPages = 5;
     enum pageSize = 4096;
     AscendingAllocator a = AscendingAllocator(numPages);
@@ -299,8 +318,10 @@ struct AscendingAllocator
     void[] b2 = a.allocate(2048);
     assert(!a.expand(b1, 1));
     assert(a.expand(b1, 0));
+    testrw(b1);
 
     assert(a.expand(b2, 2048));
+    testrw(b2);
     assert(b2.length == pageSize);
     assert(a.getAvailableSize() == pageSize * 3);
 
@@ -310,24 +331,31 @@ struct AscendingAllocator
     assert(a.reallocate(b3, b3.length));
 
     assert(b3.length == 2048);
+    testrw(b3);
     assert(a.expand(b3, 1000));
+    testrw(b3);
     assert(a.expand(b3, 0));
     assert(b3.length == 3048);
     assert(a.expand(b3, 1047));
+    testrw(b3);
     assert(a.expand(b3, 0));
     assert(b3.length == 4095);
     assert(a.expand(b3, 100));
     assert(a.expand(b3, 0));
     assert(a.getAvailableSize() == pageSize);
     assert(b3.length == 4195);
+    testrw(b3);
 
     assert(a.reallocate(b1, b1.length));
     assert(a.reallocate(b2, b2.length));
     assert(a.reallocate(b3, b3.length));
     
     assert(a.reallocate(b3, 2 * pageSize));
+    testrw(b3);
     assert(a.reallocate(b1, pageSize - 1));
+    testrw(b1);
     assert(a.expand(b1, 1));
+    testrw(b1);
     assert(!a.expand(b1, 1));
 
     a.invalidate();
