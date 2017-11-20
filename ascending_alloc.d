@@ -196,7 +196,7 @@ struct AscendingAllocator
     }
 }
 
-void main()
+@system unittest
 {
     AscendingAllocator a = AscendingAllocator(4);
     ubyte* testPtr;
@@ -235,4 +235,19 @@ void main()
     assert(a.data);
     a.deallocate(b3);
     assert(!a.data);
+}
+
+@system unittest
+{
+    size_t numPages = 4194304;
+    AscendingAllocator a = AscendingAllocator(numPages);
+    for (int i = 0; i < numPages; i++) {
+        void[] buf = a.allocate(1);
+        *cast(ubyte*)buf.ptr = 10;
+        a.deallocate(buf);
+    }
+}
+
+void main()
+{
 }
