@@ -7,16 +7,40 @@ size_t roundUpToMultipleOf(size_t s, uint base)
     auto rem = s % base;
     return rem ? s + base - rem : s;
 }
+/**
+`AscendingPageAllocator` is a fast and safe allocator which rounds all allocations
+to page size multiples. It reserves a range of virtual addresses (`mmap` for Posix
+and `VirtualAlloc` for Windows) and allocates memory at consecutive virtual
+addresses.
 
-struct AscendingAllocator
+When a chunk of memory is requested, the allocator finds a range of
+virtual pages which satisfy the requested size, changing their protection to 
+read and write using OS primitives (`mprotect` and `VirtualProtect`).
+The physical memory is allocated on demand, when the pages are accessed.
+
+Deallocation removes any read/write permissions from the target pages
+and notifies the OS to reclaim the physical memory, while keeping the virtual
+memory.
+*/
+struct AscendingPageAllocator
 {
-    size_t numPages;
     enum size_t pageSize = 4096;
-    void* data;
-    void* offset;
-    size_t pagesUsed;
+    size_t numPages;
     bool valid;
 
+    // The start of the virtual address range
+    void* data;
+
+    // Keeps track of there the next allocation should start
+    void* offset;
+    
+    // Number of pages which contain alive objects
+    size_t pagesUsed;
+
+    /**
+    The allocator receives as a parameter the size in pages of the virtual
+    address range (we assume the page size is 4096).
+    */
     this(size_t pages)
     {
         import std.exception : enforce;
@@ -38,16 +62,18 @@ struct AscendingAllocator
             enforce(data != null, "Failed to VirtualAlloc memory");
         }
         offset = data;
-
     }
 
-    // Allocate multiple of page size, by changing page protection inside the arena
+    /**
+    Round the allocation to the next multiple of the page size.
+    The allocation only reserves a range of virtual pages but the actual
+    physical memory is allocated on demand, when accessing the memory
+    Returns `null` on failure or if the requested size exceeds the remaining capacity.
+    */
     void[] allocate(size_t n)
     {
         import std.exception : enforce;
 
-        // If the requested size exceeds available space in current arena,
-        // create new arena
         size_t goodSize = goodAllocSize(n);
         if (offset - data > numPages * pageSize - goodSize)
             return null;
@@ -75,12 +101,21 @@ struct AscendingAllocator
         return cast(void[]) result[0 .. n];
     }
 
+    /**
+    Rounds the requested size to the next multiple of the page size
+    */
     size_t goodAllocSize(size_t n)
     {
         return n.roundUpToMultipleOf(pageSize);
     }
 
-
+    /**
+    Removes the read/write protection of the pages which the passed buffer covers.
+    Hints the OS to reclaim the physical memory(``madvise`` for Posix and
+    ``VirtualUnlock`` for Windows).
+    If the allocator is no longer valid, and all objects have been deallocated,
+    the range of virtual addresses is unmapped.
+    */
     version(Posix)
     {
         bool deallocate(void[] buf)
@@ -92,12 +127,11 @@ struct AscendingAllocator
             auto ret = mprotect(buf.ptr, goodSize, PROT_NONE);
             enforce(ret == 0, "Failed to deallocate memory, mprotect failure"); 
 
-            // We might need madvise to let the OS reclaim the resources
+            // madvise to let the OS reclaim the resources
             ret = posix_madvise(buf.ptr, goodSize, POSIX_MADV_DONTNEED); 
             enforce(ret == 0, "Failed to deallocate, posix_madvise failure");
             pagesUsed -= goodSize / pageSize;
 
-            // unmap the arena if we don't use it anymore and it doesn't hold any alive objects
             if (!valid && pagesUsed == 0)
             {
                 munmap(data, numPages * pageSize);
@@ -120,6 +154,8 @@ struct AscendingAllocator
             auto ret = VirtualProtect(buf.ptr, goodSize, PAGE_NOACCESS, &oldProtect);
             enforce(ret != 0, "Failed to deallocate memory, VirtualProtect failure");
 
+            // MSDN states for VirtualAlloc: Calling VirtualUnlock on a range
+            // of memory that is not locked releases the pages from the process's working set.
             VirtualUnlock(buf.ptr, goodSize);
             pagesUsed -= goodSize / pageSize;
 
@@ -133,11 +169,19 @@ struct AscendingAllocator
         }
     }
 
+    /**
+    Return ``true`` if the passed buffer is inside the range of virtual adresses.
+    Does not guarantee that the passed buffer is still valid.
+    */
     bool owns(void[] buf)
     {
         return buf.ptr >= data && buf.ptr < buf.ptr + numPages * pageSize;
     }
 
+    /**
+    Marks the allocator unavailable for further allocations and sets the ``valid``
+    flag to ``false``, which unmaps the virtual address range when all memory is deallocated.
+    */
     void invalidate()
     {
         valid = false;
@@ -156,11 +200,20 @@ struct AscendingAllocator
         }
     }
 
+    /**
+    Returns the available size for further allocations in bytes.
+    */
     size_t getAvailableSize()
     {
         return numPages * pageSize + data - offset;
     }
 
+    /**
+    If the passed buffer is not the last allocation, then ``delta`` can be
+    at most the number of bytes left on the last page.
+    Otherwise, we can expand the last allocation until the end of the virtual
+    address range.
+    */
     bool expand(ref void[] b, size_t delta)
     {
         import std.exception : enforce;
@@ -169,11 +222,11 @@ struct AscendingAllocator
         if (!b.ptr) return false;
 
         size_t goodSize = goodAllocSize(b.length);
-        if (b.ptr + goodSize != offset)
+        size_t bytesLeftOnPage = goodSize - b.length;
+        if (b.ptr + goodSize != offset && delta > bytesLeftOnPage)
             return false;
 
         size_t extraPages = 0;
-        size_t bytesLeftOnPage = goodSize - b.length;
 
         if (delta > bytesLeftOnPage)
         {
@@ -211,6 +264,11 @@ struct AscendingAllocator
         return true;
     }
 
+    /**
+    First it tries to ``expand`` to satisfy ``newSize``.
+    If not possible, it allocates a new buffer of length ``newSize``,
+    copies the contents and deallocates the previous buffer.
+    */
     bool reallocate(ref void[] b, size_t newSize)
     {
         if (!newSize) return deallocate(b);
@@ -239,7 +297,7 @@ struct AscendingAllocator
         assert(buf[b.length - 1] == 101);
     }
 
-    AscendingAllocator a = AscendingAllocator(4);
+    AscendingPageAllocator a = AscendingPageAllocator(4);
     void[] b1 = a.allocate(1);
     assert(a.getAvailableSize() == 3 * 4096);
     testrw(b1);
@@ -282,7 +340,7 @@ struct AscendingAllocator
     }
 
     size_t numPages = 26214;
-    AscendingAllocator a = AscendingAllocator(numPages);
+    AscendingPageAllocator a = AscendingPageAllocator(numPages);
     for (int i = 0; i < numPages; i++) {
         void[] buf = a.allocate(4096);
         assert(buf.length == 4096);
@@ -310,14 +368,15 @@ struct AscendingAllocator
 
     size_t numPages = 5;
     enum pageSize = 4096;
-    AscendingAllocator a = AscendingAllocator(numPages);
+    AscendingPageAllocator a = AscendingPageAllocator(numPages);
 
     void[] b1 = a.allocate(2048);
     assert(b1.length == 2048);
     
     void[] b2 = a.allocate(2048);
-    assert(!a.expand(b1, 1));
+    assert(a.expand(b1, 2048));
     assert(a.expand(b1, 0));
+    assert(!a.expand(b1, 1));
     testrw(b1);
 
     assert(a.expand(b2, 2048));
