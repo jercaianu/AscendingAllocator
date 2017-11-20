@@ -95,7 +95,7 @@ struct AscendingAllocator
             pagesUsed += goodSize / pageSize;
 
             auto ret = VirtualProtect(result, goodSize, PAGE_READWRITE, &oldProtect);
-            enforce(ret == 0, "Failed to allocate memory, VirtualProtect failure");
+            enforce(ret != 0, "Failed to allocate memory, VirtualProtect failure");
 
             return cast(void[]) result[0 .. n];
         }
@@ -145,7 +145,7 @@ struct AscendingAllocator
             uint oldProtect;
             size_t goodSize = goodAllocSize(buf.length);
             auto ret = VirtualProtect(buf.ptr, goodSize, PAGE_NOACCESS, &oldProtect);
-            enforce(ret == 0, "Failed to deallocate memory, VirtualProtect failure");
+            enforce(ret != 0, "Failed to deallocate memory, VirtualProtect failure");
 
             VirtualUnlock(buf.ptr, goodSize);
             pagesUsed -= goodSize / pageSize;
@@ -199,12 +199,27 @@ struct AscendingAllocator
 void main()
 {
     AscendingAllocator a = AscendingAllocator(4);
+    ubyte* testPtr;
     void[] b1 = a.allocate(1);
     assert(a.getAvailableSize() == 3 * 4096);
+    testPtr = cast(ubyte*) b1.ptr;
+    testPtr[0] = 3;
+    assert(testPtr[0] == 3);
+
     void[] b2 = a.allocate(2);
     assert(a.getAvailableSize() == 2 * 4096);
+    testPtr = cast(ubyte*) b2.ptr;
+    testPtr[1] = 7;
+    assert(testPtr[1] == 7);
+
     void[] b3 = a.allocate(4097);
     assert(a.getAvailableSize() == 0);
+    testPtr = cast(ubyte*) b3.ptr;
+    testPtr[1000] = 17;
+    assert(testPtr[1000] == 17);
+    testPtr[4096] = 19;
+    assert(testPtr[4096] == 19);
+
     assert(b1.length == 1);
     assert(b2.length == 2);
     assert(b3.length == 4097);
