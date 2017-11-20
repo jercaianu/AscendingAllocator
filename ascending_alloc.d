@@ -198,5 +198,26 @@ struct AscendingAllocator
 
 void main()
 {
+    AscendingAllocator a = AscendingAllocator(4);
+    void[] b1 = a.allocate(1);
+    assert(a.getAvailableSize() == 3 * 4096);
+    void[] b2 = a.allocate(2);
+    assert(a.getAvailableSize() == 2 * 4096);
+    void[] b3 = a.allocate(4097);
+    assert(a.getAvailableSize() == 0);
+    assert(b1.length == 1);
+    assert(b2.length == 2);
+    assert(b3.length == 4097);
 
+    assert(a.offset - a.data == 4 * 4096);
+    void[] b4 = a.allocate(4);
+    assert(!b4);
+    a.invalidate();
+
+    a.deallocate(b1);
+    assert(a.data);
+    a.deallocate(b2);
+    assert(a.data);
+    a.deallocate(b3);
+    assert(!a.data);
 }
